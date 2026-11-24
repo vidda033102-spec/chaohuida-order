@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炒燴噠｜商業 POS 接單管理後台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Microsoft JhengHei", sans-serif; background: #0f172a; }
+    @keyframes pulseBorder { 0%, 100% { border-color: #f97316; } 50% { border-color: #fef08a; } }
+    .new-order-flash { animation: pulseBorder 1.2s infinite; border-width: 3px; }
+  </style>
+</head>
+<body class="text-slate-800 min-h-screen">
+
+  <!-- 密碼鎖定登入畫面 (店員: 332606 / 老闆: 9999) -->
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center p-4 bg-slate-900">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-5 text-center">
+      <div>
+        <span class="text-xs font-extrabold tracking-widest text-orange-600 uppercase">CHAO HUI DA POS</span>
+        <h1 class="text-2xl font-black text-slate-900 mt-1">炒燴噠 店家管理後台</h1>
+        <p class="text-xs text-slate-500 mt-1">請輸入店員接單密碼或老闆管理密碼</p>
+      </div>
+      <input id="pinInput" type="password" inputmode="numeric" maxlength="10" placeholder="請輸入密碼"
+             onkeydown="if(event.key==='Enter') handleLogin()"
+             class="w-full text-center text-2xl tracking-[0.4em] font-black border-2 border-slate-300 rounded-xl py-3 focus:outline-none focus:border-orange-600" />
+      <button onclick="handleLogin()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-xl text-base shadow">
+        登入系統
+      </button>
+    </div>
+  </div>
+
+  <!-- 後台主介面 -->
+  <div id="adminApp" class="hidden min-h-screen bg-slate-100 flex flex-col">
+
+    <!-- 頂部控制列：營業開關 ＋ 尖峰忙碌延遲一鍵切換 -->
+    <header class="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-30 shadow-md">
+      <div class="flex items-center gap-3">
+        <h1 class="text-lg font-black tracking-tight">炒燴噠 POS</h1>
+        <span id="roleBadge" class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-700 text-amber-300">店員模式</span>
+        <button id="toggleOpenBtn" onclick="toggleStoreOpen()" class="text-xs font-extrabold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500">
+          ● 營業接單中
+        </button>
+      </div>
+
+      <!-- 尖峰忙碌延遲時間快速控制 -->
+      <div class="flex items-center gap-1.5 bg-slate-800 p-1.5 rounded-xl border border-slate-700">
+        <span class="text-xs font-bold text-slate-300 px-1.5">尖峰延遲：</span>
+        <button onclick="setDelayMinutes(0)" id="delay-0" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-600 text-white">正常</button>
+        <button onclick="setDelayMinutes(15)" id="delay-15" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200 hover:bg-amber-600">+15分</button>
+        <button onclick="setDelayMinutes(30)" id="delay-30" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200 hover:bg-red-600">+30分</button>
+        <button onclick="promptCustomDelay()" id="delay-custom" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200">自訂</button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button onclick="testBeep()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-700">
+          🔔 測試提示音
+        </button>
+        <button onclick="logout()" class="text-xs bg-red-600/80 hover:bg-red-600 text-white px-2.5 py-1.5 rounded-lg font-bold">
+          登出
+        </button>
+      </div>
+    </header>
+
+    <!-- 分頁導覽列 -->
+    <nav class="bg-white border-b border-slate-200 px-4 flex gap-2 overflow-x-auto">
+      <button onclick="switchTab('orders')" id="tab-orders" class="tab-btn py-3 px-4 text-sm font-extrabold border-b-2 border-orange-600 text-orange-600">
+        即時接單看板 <span id="pendingCountBadge" class="ml-1 bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+      </button>
+      <button onclick="switchTab('history')" id="tab-history" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800">
+        已結案 / 退單紀錄
+      </button>
+      <button onclick="switchTab('menu')" id="tab-menu" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800">
+        菜單上下架與改價
+      </button>
+      <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800">
+        營業時間與公告
+      </button>
+      <button onclick="switchTab('revenue')" id="tab-revenue" class="hidden tab-btn py-3 px-4 text-sm font-extrabold text-amber-600 hover:text-amber-700">
+        💰 老闆營業額報表
+      </button>
+    </nav>
+
+    <!-- 內容區 -->
+    <main class="p-4 max-w-7xl w-full mx-auto flex-1">
+
+      <!-- 1. 即時接單看板 (KDS) -->
+      <div id="view-orders" class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-orange-700 flex items-center justify-between px-1">
+              <span>🔔 新進待接單</span>
+              <span id="colPendingCount" class="bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listPending" class="space-y-3"></div>
+          </div>
+
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-blue-700 flex items-center justify-between px-1">
+              <span>🍳 廚房製作中</span>
+              <span id="colPreparingCount" class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listPreparing" class="space-y-3"></div>
+          </div>
+
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-emerald-700 flex items-center justify-between px-1">
+              <span>🛍️ 完成待取餐</span>
+              <span id="colReadyCount" class="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listReady" class="space-y-3"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 已結案與退單紀錄 -->
+      <div id="view-history" class="hidden space-y-3">
+        <div class="flex justify-between items-center">
+          <h2 class="text-base font-extrabold">今日已結案與退單明細</h2>
+          <button onclick="fetchOrders()" class="text-xs bg-white border border-slate-300 px-3 py-1.5 rounded-lg font-bold">重新整理</button>
+        </div>
+        <div id="historyList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- 3. 菜單管理 -->
+      <div id="view-menu" class="hidden space-y-4">
+        <div class="bg-white rounded-2xl p-4 border border-slate-200 flex flex-wrap items-end gap-3">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">分類</label>
+            <select id="newItemCat" class="border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold">
+              <option value="炒飯">炒飯</option>
+              <option value="炒麵">炒麵</option>
+              <option value="家常小炒">家常小炒</option>
+              <option value="湯品">湯品</option>
+              <option value="飲料">飲料</option>
+            </select>
+          </div>
+          <div class="flex-1 min-w-[160px]">
+            <label class="block text-xs font-bold text-slate-600 mb-1">新品項名稱</label>
+            <input id="newItemName" type="text" placeholder="例如：培根蛋炒飯" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+          </div>
+          <div class="w-28">
+            <label class="block text-xs font-bold text-slate-600 mb-1">售價 ($)</label>
+            <input id="newItemPrice" type="number" placeholder="90" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+          </div>
+          <button onclick="addNewMenuItem()" class="bg-orange-600 hover:bg-orange-700 text-white font-bold px-5 py-2 rounded-xl text-sm">
+            + 新增品項
+          </button>
+        </div>
+
+        <div id="adminMenuList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- 4. 營業時間與公告設定 -->
+      <div id="view-settings" class="hidden max-w-xl bg-white rounded-2xl p-5 border border-slate-200 space-y-4">
+        <h2 class="text-base font-extrabold">營業時間與前台公告設定</h2>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">中午開始時間</label>
+            <input id="cfgLunchStart" type="time" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">中午結束時間</label>
+            <input id="cfgLunchEnd" type="time" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">晚上開始時間</label>
+            <input id="cfgDinnerStart" type="time" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">晚上結束時間</label>
+            <input id="cfgDinnerEnd" type="time" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">標準基本備餐時間（分鐘）</label>
+          <input id="cfgBasePrep" type="number" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">顧客前台跑馬燈公告</label>
+          <input id="cfgNotice" type="text" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <button onclick="saveStoreSettings()" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl text-sm">
+          儲存設定並即時同步至前台
+        </button>
+      </div>
+
+      <!-- 5. 老闆專屬營業額報表 (密碼 9999 專屬) -->
+      <div id="view-revenue" class="hidden space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">今日已結案營業額</div>
+            <div id="revTodayTotal" class="text-2xl font-black text-emerald-600 mt-1">$0</div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">今日成交訂單數</div>
+            <div id="revTodayCount" class="text-2xl font-black text-slate-900 mt-1">0 筆</div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">今日平均客單價</div>
+            <div id="revAvgTicket" class="text-2xl font-black text-orange-600 mt-1">$0</div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">本月累計營業額</div>
+            <div id="revMonthTotal" class="text-2xl font-black text-blue-600 mt-1">$0</div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl p-5 border border-slate-200">
+          <h3 class="font-extrabold text-sm text-slate-800 mb-3">🔥 今日熱銷品項排行</h3>
+          <div id="topItemsList" class="space-y-2 text-sm"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+<script>
+  const SUPABASE_URL = 'https://qqhucboxycgxihfexyre.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_Yiy4kOyBFRB4TEe_bdOzhQ_pUXQ750T';
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  let userRole = null;
+  let storeConfig = null;
+  let allOrders = [];
+
+  function handleLogin() {
+    const pin = document.getElementById('pinInput').value.trim();
+    if (pin === '332606') {
+      userRole = 'staff';
+    } else if (pin === '9999') {
+      userRole = 'owner';
+    } else {
+      alert('密碼錯誤！');
+      return;
+    }
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('adminApp').classList.remove('hidden');
+
+    const badge = document.getElementById('roleBadge');
+    if (userRole === 'owner') {
+      badge.textContent = '👑 老闆模式';
+      badge.className = 'text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500 text-slate-950';
+      document.getElementById('tab-revenue').classList.remove('hidden');
+    } else {
+      badge.textContent = '店員接單模式';
+      document.getElementById('tab-revenue').classList.add('hidden');
+    }
+    initAdmin();
+  }
+
+  function logout() {
+    location.reload();
+  }
+
+  function testBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (e) {}
+  }
+
+  async function initAdmin() {
+    await loadSettings();
+    await fetchOrders();
+
+    db.channel('admin_orders_realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, payload => {
+        testBeep();
+        fetchOrders();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
+        fetchOrders();
+      })
+      .subscribe();
+  }
+
+  async function loadSettings() {
+    const { data } = await db.from('store_settings').select('config').eq('id', 1).single();
+    if (data && data.config) {
+      storeConfig = data.config;
+    } else {
+      alert('請先開啟一次顧客前台頁面初始化菜單資料，或重新整理！');
+      return;
+    }
+    updateHeaderControls();
+    renderAdminMenu();
+    fillSettingsForm();
+  }
+
+  function updateHeaderControls() {
+    if (!storeConfig) return;
+    const openBtn = document.getElementById('toggleOpenBtn');
+    if (storeConfig.isOpen) {
+      openBtn.className = 'text-xs font-extrabold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white';
+      openBtn.textContent = '● 營業接單中';
+    } else {
+      openBtn.className = 'text-xs font-extrabold px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white';
+      openBtn.textContent = '■ 已暫停接單';
+    }
+
+    document.querySelectorAll('.delay-btn').forEach(b => {
+      b.className = 'delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200';
+    });
+    const d = Number(storeConfig.delayMinutes || 0);
+    if (d === 0) document.getElementById('delay-0').classList.add('!bg-emerald-600', '!text-white');
+    else if (d === 15) document.getElementById('delay-15').classList.add('!bg-amber-600', '!text-white');
+    else if (d === 30) document.getElementById('delay-30').classList.add('!bg-red-600', '!text-white');
+    else {
+      const customBtn = document.getElementById('delay-custom');
+      customBtn.classList.add('!bg-purple-600', '!text-white');
+      customBtn.textContent = `+${d}分`;
+    }
+  }
+
+  async function syncConfig() {
+    await db.from('store_settings').upsert({ id: 1, config: storeConfig });
+    updateHeaderControls();
+  }
+
+  async function toggleStoreOpen() {
+    storeConfig.isOpen = !storeConfig.isOpen;
+    await syncConfig();
+  }
+
+  async function setDelayMinutes(mins) {
+    storeConfig.delayMinutes = mins;
+    document.getElementById('delay-custom').textContent = '自訂';
+    await syncConfig();
+  }
+
+  async function promptCustomDelay() {
+    const val = prompt('請輸入要順延的分鐘數（例如輸入 20 代表延遲 20 分鐘，輸入 0 恢復正常）：', storeConfig.delayMinutes || 20);
+    if (val === null) return;
+    const num = Math.max(0, parseInt(val, 10) || 0);
+    storeConfig.delayMinutes = num;
+    await syncConfig();
+  }
+
+  async function fetchOrders() {
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const { data } = await db.from('orders')
+      .select('*')
+      .gte('created_at', monthStart.toISOString())
+      .order('created_at', { ascending: true });
+
+    allOrders = data || [];
+    renderKdsBoards();
+    renderHistory();
+    if (userRole === 'owner') renderRevenue();
+  }
+
+  function renderKdsBoards() {
+    const todayStr = new Date().toDateString();
+    const todayOrders = allOrders.filter(o => new Date(o.created_at).toDateString() === todayStr);
+
+    const pending = todayOrders.filter(o => o.status === 'pending');
+    const preparing = todayOrders.filter(o => o.status === 'preparing');
+    const ready = todayOrders.filter(o => o.status === 'ready');
+
+    document.getElementById('pendingCountBadge').textContent = pending.length;
+    document.getElementById('colPendingCount').textContent = pending.length;
+    document.getElementById('colPreparingCount').textContent = preparing.length;
+    document.getElementById('colReadyCount').textContent = ready.length;
+
+    document.getElementById('listPending').innerHTML = pending.map(o => orderCardHtml(o, true)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無待接訂單</div>';
+    document.getElementById('listPreparing').innerHTML = preparing.map(o => orderCardHtml(o, false)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無製作中訂單</div>';
+    document.getElementById('listReady').innerHTML = ready.map(o => orderCardHtml(o, false)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無待取餐訂單</div>';
+  }
+
+  function orderCardHtml(o, isNew) {
+    const itemsHtml = (o.items || []).map(i => {
+      const specs = [...(i.addons || []), ...(i.tastes || []), i.note].filter(Boolean).join(' / ');
+      return `
+        <div class="py-1 border-b border-slate-100 last:border-0">
+          <div class="flex justify-between font-bold text-sm text-slate-900">
+            <span>${i.name} × ${i.qty}</span>
+            <span>$${i.subtotal}</span>
+          </div>
+          ${specs ? `<div class="text-xs text-orange-700 font-semibold mt-0.5">↳ ${specs}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    let actionBtns = '';
+    if (o.status === 'pending') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'preparing')" class="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 rounded-xl text-xs">接單開始製作</button>
+        <button onclick="rejectOrder(${o.id})" class="bg-red-100 hover:bg-red-200 text-red-700 font-bold px-3 py-2 rounded-xl text-xs">退單</button>
+      `;
+    } else if (o.status === 'preparing') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'ready')" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl text-xs">製作完成（通知取餐）</button>
+        <button onclick="rejectOrder(${o.id})" class="bg-slate-100 text-slate-600 font-bold px-2.5 py-2 rounded-xl text-xs">退單</button>
+      `;
+    } else if (o.status === 'ready') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'completed')" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-xl text-xs">✓ 客人已取餐結案</button>
+      `;
+    }
+
+    return `
+      <div class="bg-white rounded-xl p-3.5 shadow-sm border border-slate-200 space-y-2.5 ${isNew ? 'new-order-flash' : ''}">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div>
+            <span class="text-xl font-black text-orange-600">${o.order_no}</span>
+            <span class="ml-2 text-xs font-extrabold bg-slate-900 text-white px-2 py-0.5 rounded">取餐 ${o.pickup_time}</span>
+          </div>
+          <span class="text-base font-black text-slate-900">$${o.total_price}</span>
+        </div>
+        <div class="text-xs text-slate-600 flex justify-between">
+          <span>👤 ${o.customer_name}（${o.customer_phone}）</span>
+          <span>${new Date(o.created_at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })} 下單</span>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-2">${itemsHtml}</div>
+        ${o.note ? `<div class="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1.5 rounded-lg">整單備註：${o.note}</div>` : ''}
+        <div class="flex gap-2 pt-1">${actionBtns}</div>
+      </div>
+    `;
+  }
+
+  async function updateOrderStatus(id, status) {
+    await db.from('orders').update({ status }).eq('id', id);
+    fetchOrders();
+  }
+
+  async function rejectOrder(id) {
+    const reason = prompt('請輸入退單原因（例如：今日已售完 / 電話聯絡不上）：', '今日已售完');
+    if (reason === null) return;
+    await db.from('orders').update({ status: 'rejected', reject_reason: reason }).eq('id', id);
+    fetchOrders();
+  }
+
+  function renderHistory() {
+    const todayStr = new Date().toDateString();
+    const list = allOrders
+      .filter(o => new Date(o.created_at).toDateString() === todayStr && ['completed', 'rejected'].includes(o.status))
+      .reverse();
+
+    document.getElementById('historyList').innerHTML = list.map(o => `
+      <div class="bg-white rounded-xl p-3.5 border border-slate-200 space-y-1.5">
+        <div class="flex justify-between items-center">
+          <span class="font-black text-base">${o.order_no}｜${o.customer_name}</span>
+          ${o.status === 'completed'
+            ? '<span class="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">已結案</span>'
+            : '<span class="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded">已退單</span>'}
+        </div>
+        <div class="text-xs text-slate-500">取餐時間：${o.pickup_time}｜電話：${o.customer_phone}</div>
+        <div class="text-xs text-slate-700">${(o.items || []).map(i => `${i.name}x${i.qty}`).join('、')}</div>
+        ${o.reject_reason ? `<div class="text-xs text-red-600 font-bold">原因：${o.reject_reason}</div>` : ''}
+        <div class="text-right font-extrabold text-sm text-slate-900">$${o.total_price}</div>
+      </div>
+    `).join('') || '<div class="text-sm text-slate-400">今日尚無已結案或退單紀錄</div>';
+  }
+
+  function renderAdminMenu() {
+    if (!storeConfig) return;
+    document.getElementById('adminMenuList').innerHTML = storeConfig.menu.map((item, idx) => `
+      <div class="bg-white rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-2">
+        <div>
+          <span class="text-[11px] font-bold text-slate-400">${item.cat}</span>
+          <div class="font-bold text-sm text-slate-900">${item.name}</div>
+          <div class="flex items-center gap-1 mt-1">
+            <span class="text-xs text-slate-500">$</span>
+            <input type="number" value="${item.price}" onchange="updateItemPrice(${idx}, this.value)"
+                   class="w-16 border border-slate-300 rounded px-1.5 py-0.5 text-xs font-bold text-orange-600" />
+          </div>
+        </div>
+        <div class="flex flex-col gap-1.5 items-end">
+          <button onclick="toggleItemSoldOut(${idx})"
+                  class="text-xs font-bold px-3 py-1 rounded-lg ${item.soldOut ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}">
+            ${item.soldOut ? '已售完（點此上架）' : '供應中（點此售完）'}
+          </button>
+          <button onclick="deleteMenuItem(${idx})" class="text-[11px] text-slate-400 hover:text-red-500">刪除品項</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async function toggleItemSoldOut(idx) {
+    storeConfig.menu[idx].soldOut = !storeConfig.menu[idx].soldOut;
+    await syncConfig();
+    renderAdminMenu();
+  }
+
+  async function updateItemPrice(idx, newPrice) {
+    storeConfig.menu[idx].price = Math.max(0, parseInt(newPrice, 10) || 0);
+    await syncConfig();
+  }
+
+  async function addNewMenuItem() {
+    const cat = document.getElementById('newItemCat').value;
+    const name = document.getElementById('newItemName').value.trim();
+    const price = parseInt(document.getElementById('newItemPrice').value, 10);
+    if (!name || isNaN(price)) return alert('請填寫完整的品項名稱與價格！');
+
+    storeConfig.menu.push({ id: 'm' + Date.now(), cat, name, price, soldOut: false });
+    document.getElementById('newItemName').value = '';
+    document.getElementById('newItemPrice').value = '';
+    await syncConfig();
+    renderAdminMenu();
+  }
+
+  async function deleteMenuItem(idx) {
+    if (!confirm(`確定要刪除「${storeConfig.menu[idx].name}」嗎？`)) return;
+    storeConfig.menu.splice(idx, 1);
+    await syncConfig();
+    renderAdminMenu();
+  }
+
+  function fillSettingsForm() {
+    if (!storeConfig) return;
+    document.getElementById('cfgLunchStart').value = storeConfig.lunchStart;
+    document.getElementById('cfgLunchEnd').value = storeConfig.lunchEnd;
+    document.getElementById('cfgDinnerStart').value = storeConfig.dinnerStart;
+    document.getElementById('cfgDinnerEnd').value = storeConfig.dinnerEnd;
+    document.getElementById('cfgBasePrep').value = storeConfig.basePrepMinutes || 15;
+    document.getElementById('cfgNotice').value = storeConfig.notice || '';
+  }
+
+  async function saveStoreSettings() {
+    storeConfig.lunchStart = document.getElementById('cfgLunchStart').value;
+    storeConfig.lunchEnd = document.getElementById('cfgLunchEnd').value;
+    storeConfig.dinnerStart = document.getElementById('cfgDinnerStart').value;
+    storeConfig.dinnerEnd = document.getElementById('cfgDinnerEnd').value;
+    storeConfig.basePrepMinutes = parseInt(document.getElementById('cfgBasePrep').value, 10) || 15;
+    storeConfig.notice = document.getElementById('cfgNotice').value.trim();
+    await syncConfig();
+    alert('已儲存！顧客前台已即時更新營業時間與公告。');
+  }
+
+  function renderRevenue() {
+    if (userRole !== 'owner') return;
+    const todayStr = new Date().toDateString();
+    const completedMonth = allOrders.filter(o => o.status === 'completed');
+    const completedToday = completedMonth.filter(o => new Date(o.created_at).toDateString() === todayStr);
+
+    const todaySum = completedToday.reduce((s, o) => s + (o.total_price || 0), 0);
+    const monthSum = completedMonth.reduce((s, o) => s + (o.total_price || 0), 0);
+    const avg = completedToday.length ? Math.round(todaySum / completedToday.length) : 0;
+
+    document.getElementById('revTodayTotal').textContent = `$${todaySum.toLocaleString()}`;
+    document.getElementById('revTodayCount').textContent = `${completedToday.length} 筆`;
+    document.getElementById('revAvgTicket').textContent = `$${avg}`;
+    document.getElementById('revMonthTotal').textContent = `$${monthSum.toLocaleString()}`;
+
+    const itemStats = {};
+    completedToday.forEach(o => {
+      (o.items || []).forEach(i => {
+        itemStats[i.name] = (itemStats[i.name] || 0) + i.qty;
+      });
+    });
+
+    const sorted = Object.entries(itemStats).sort((a, b) => b[1] - a[1]);
+    document.getElementById('topItemsList').innerHTML = sorted.map(([name, qty], idx) => `
+      <div class="flex justify-between items-center py-1.5 border-b border-slate-100">
+        <span><strong class="text-orange-600 mr-2">#${idx + 1}</strong>${name}</span>
+        <span class="font-bold text-slate-800">${qty} 份</span>
+      </div>
+    `).join('') || '<div class="text-slate-400 text-xs">今日尚無已結案銷售紀錄</div>';
+  }
+
+  function switchTab(tabName) {
+    ['orders', 'history', 'menu', 'settings', 'revenue'].forEach(t => {
+      document.getElementById(`view-${t}`).classList.add('hidden');
+      const btn = document.getElementById(`tab-${t}`);
+      if (btn) {
+        btn.classList.remove('border-b-2', 'border-orange-600', 'text-orange-600');
+        btn.classList.add('text-slate-500');
+      }
+    });
+    document.getElementById(`view-${tabName}`).classList.remove('hidden');
+    const activeBtn = document.getElementById(`tab-${tabName}`);
+    activeBtn.classList.add('border-b-2', 'border-orange-600', 'text-orange-600');
+    activeBtn.classList.remove('text-slate-500');
+    if (tabName === 'revenue') renderRevenue();
+  }
+</script>
+</body>
+</html>
