@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炒燴噠｜商業 POS 接單管理後台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Microsoft JhengHei", sans-serif; background: #0f172a; }
+    @keyframes pulseBorder { 0%, 100% { border-color: #f97316; } 50% { border-color: #fef08a; } }
+    .new-order-flash { animation: pulseBorder 1.2s infinite; border-width: 3px; }
+  </style>
+</head>
+<body class="text-slate-800 min-h-screen">
+
+  <!-- 密碼鎖定登入畫面 (店員: 332606 / 老闆: 9999) -->
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center p-4 bg-slate-900">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-5 text-center">
+      <div>
+        <span class="text-xs font-extrabold tracking-widest text-orange-600 uppercase">CHAO HUI DA POS</span>
+        <h1 class="text-2xl font-black text-slate-900 mt-1">炒燴噠 店家管理後台</h1>
+        <p class="text-xs text-slate-500 mt-1">請輸入店員接單密碼或老闆管理密碼</p>
+      </div>
+      <input id="pinInput" type="password" inputmode="numeric" maxlength="10" placeholder="請輸入密碼"
+             onkeydown="if(event.key==='Enter') handleLogin()"
+             class="w-full text-center text-2xl tracking-[0.4em] font-black border-2 border-slate-300 rounded-xl py-3 focus:outline-none focus:border-orange-600" />
+      <button onclick="handleLogin()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-xl text-base shadow">
+        登入系統
+      </button>
+    </div>
+  </div>
+
+  <!-- 後台主介面 -->
+  <div id="adminApp" class="hidden min-h-screen bg-slate-100 flex flex-col">
+
+    <!-- 頂部控制列 -->
+    <header class="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-30 shadow-md">
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-lg font-black tracking-tight">炒燴噠 POS</h1>
+        <span id="roleBadge" class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-700 text-amber-300">店員模式</span>
+        <button id="toggleOpenBtn" onclick="toggleStoreOpen()" class="text-xs font-extrabold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500">
+          ● 營業接單中
+        </button>
+      </div>
+
+      <!-- 尖峰忙碌延遲時間快速控制 -->
+      <div class="flex items-center gap-1.5 bg-slate-800 p-1.5 rounded-xl border border-slate-700">
+        <span class="text-xs font-bold text-slate-300 px-1">尖峰延遲：</span>
+        <button onclick="setDelayMinutes(0)" id="delay-0" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-600 text-white">正常</button>
+        <button onclick="setDelayMinutes(15)" id="delay-15" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200 hover:bg-amber-600">+15分</button>
+        <button onclick="setDelayMinutes(30)" id="delay-30" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200 hover:bg-red-600">+30分</button>
+        <button onclick="promptCustomDelay()" id="delay-custom" class="delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200">自訂</button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button onclick="openWalkInModal()" class="text-xs bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded-lg font-extrabold shadow">
+          + 現場/電話補單
+        </button>
+        <button onclick="testBeep()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-700">
+          🔔 提示音
+        </button>
+        <button onclick="logout()" class="text-xs bg-red-600/80 hover:bg-red-600 text-white px-2.5 py-1.5 rounded-lg font-bold">
+          登出
+        </button>
+      </div>
+    </header>
+
+    <!-- 分頁導覽列 -->
+    <nav class="bg-white border-b border-slate-200 px-4 flex gap-2 overflow-x-auto">
+      <button onclick="switchTab('orders')" id="tab-orders" class="tab-btn py-3 px-4 text-sm font-extrabold border-b-2 border-orange-600 text-orange-600 whitespace-nowrap">
+        即時接單看板 <span id="pendingCountBadge" class="ml-1 bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+      </button>
+      <button onclick="switchTab('history')" id="tab-history" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800 whitespace-nowrap">
+        已結案 / 退單紀錄
+      </button>
+      <button onclick="switchTab('menu')" id="tab-menu" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800 whitespace-nowrap">
+        菜單與加主菜完售（分類總表）
+      </button>
+      <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn py-3 px-4 text-sm font-bold text-slate-500 hover:text-slate-800 whitespace-nowrap">
+        營業時間與公告（商業排程）
+      </button>
+      <button onclick="switchTab('revenue')" id="tab-revenue" class="hidden tab-btn py-3 px-4 text-sm font-extrabold text-amber-600 hover:text-amber-700 whitespace-nowrap">
+        💰 老闆對帳報表
+      </button>
+    </nav>
+
+    <!-- 內容區 -->
+    <main class="p-4 max-w-7xl w-full mx-auto flex-1">
+
+      <!-- 1. 即時接單看板 -->
+      <div id="view-orders" class="space-y-4">
+        <div class="bg-white rounded-2xl p-3.5 border border-orange-200 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-extrabold text-orange-700">🍳 廚房待炒備料總表（自動加總「新進待接單 + 製作中」餐點與加料）</span>
+            <span id="prepTotalItemsCount" class="text-xs font-bold text-slate-500">共 0 份</span>
+          </div>
+          <div id="kitchenPrepSummary" class="flex flex-wrap gap-2 text-xs">
+            <span class="text-slate-400">目前無待炒餐點</span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-orange-700 flex items-center justify-between px-1">
+              <span>🔔 新進待接單</span>
+              <span id="colPendingCount" class="bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listPending" class="space-y-3"></div>
+          </div>
+
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-blue-700 flex items-center justify-between px-1">
+              <span>🍳 廚房製作中</span>
+              <span id="colPreparingCount" class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listPreparing" class="space-y-3"></div>
+          </div>
+
+          <div class="bg-slate-200/70 rounded-2xl p-3 space-y-3">
+            <h2 class="font-extrabold text-sm text-emerald-700 flex items-center justify-between px-1">
+              <span>🛍️ 完成待取餐</span>
+              <span id="colReadyCount" class="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <div id="listReady" class="space-y-3"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 已結案與退單紀錄 -->
+      <div id="view-history" class="hidden space-y-3">
+        <div class="flex justify-between items-center">
+          <h2 class="text-base font-extrabold">今日已結案與退單明細</h2>
+          <button onclick="fetchOrders()" class="text-xs bg-white border border-slate-300 px-3 py-1.5 rounded-lg font-bold">重新整理</button>
+        </div>
+        <div id="historyList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- 3. 菜單與加主菜完售管理（直覺分類條列） -->
+      <div id="view-menu" class="hidden space-y-5">
+        <div class="bg-white rounded-2xl p-3 border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-2 sticky top-14 z-20">
+          <div class="flex flex-wrap items-center gap-1.5" id="menuQuickJumpBar"></div>
+          <div class="flex items-center gap-2">
+            <button onclick="openAddMenuModal()" class="text-xs bg-orange-600 hover:bg-orange-700 text-white font-extrabold px-3.5 py-2 rounded-xl shadow-sm">
+              + 新增品項 / 加料
+            </button>
+            <button onclick="resetAllSoldOut()" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3.5 py-2 rounded-xl shadow-sm">
+              ↺ 全部恢復供應
+            </button>
+          </div>
+        </div>
+
+        <section id="sec-addons" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm scroll-mt-28">
+          <div class="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between">
+            <h2 class="text-sm font-black">🥩 加主菜選項（點右側按鈕直接切換完售，炒飯自動隱藏海鮮）</h2>
+            <span class="text-xs text-slate-300">共 <span id="addonCountText">0</span> 項</span>
+          </div>
+          <div id="adminAddonRows" class="divide-y divide-slate-100"></div>
+        </section>
+
+        <div id="adminCategorizedMenus" class="space-y-5"></div>
+      </div>
+
+      <!-- 4. 商業級營業時間、公休排程與多層級公告管理 -->
+      <div id="view-settings" class="hidden max-w-4xl space-y-5">
+
+        <!-- 卡片 A：每週固定公休日 & 特定日期排休 -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h2 class="text-base font-black text-slate-900">📅 固定公休日與臨時特休排程</h2>
+              <p class="text-xs text-slate-500 mt-0.5">勾選的星期或日期，顧客前台會自動顯示休假公告並鎖定下單</p>
+            </div>
+          </div>
+
+          <div>
+            <span class="block text-xs font-extrabold text-slate-700 mb-2">每週固定公休日（可直接點擊切換）：</span>
+            <div class="flex flex-wrap gap-2" id="weeklyClosedCheckboxes">
+              <label class="cursor-pointer select-none"><input type="checkbox" value="1" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週一公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="2" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週二公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="3" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週三公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="4" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週四公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="5" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週五公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="6" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週六公休</span></label>
+              <label class="cursor-pointer select-none"><input type="checkbox" value="0" class="hidden peer weekly-day-cb"><span class="px-3.5 py-2 rounded-xl text-xs font-extrabold border border-slate-300 peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600 inline-block">週日公休</span></label>
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-slate-100">
+            <span class="block text-xs font-extrabold text-slate-700 mb-2">指定日期臨時店休（例如連假、拜拜、家裡有事）：</span>
+            <div class="flex flex-wrap items-center gap-2 mb-2">
+              <input id="newHolidayDate" type="date" class="border border-slate-300 rounded-xl px-3 py-1.5 text-sm font-bold" />
+              <button type="button" onclick="addSpecialHoliday()" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-4 py-2 rounded-xl text-xs">
+                + 加入店休日期
+              </button>
+            </div>
+            <div id="specialHolidaysList" class="flex flex-wrap gap-2"></div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-extrabold text-slate-700 mb-1">公休 / 暫停接單時顯示給客人的說明文字</label>
+            <input id="cfgClosedReason" type="text" placeholder="例如：今日臨時公休一日，明日正常營業！" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+          </div>
+        </div>
+
+        <!-- 卡片 B：午晚餐營業時段獨立開關 & 接單規則 -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <h2 class="text-base font-black text-slate-900">⏰ 午晚餐營業時段與接單規則</h2>
+            <p class="text-xs text-slate-500 mt-0.5">可單獨關閉「中午」或「晚上」時段，並設定打烊前幾分鐘停止線上接單</p>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- 中午時段 -->
+            <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <span class="font-extrabold text-sm text-slate-800">☀️ 中午營業時段</span>
+                <label class="flex items-center gap-1.5 text-xs font-extrabold text-emerald-700 cursor-pointer">
+                  <input id="cfgLunchEnabled" type="checkbox" class="w-4 h-4 accent-emerald-600" /> 開放接單
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[11px] font-bold text-slate-500 mb-1">開始取餐</label>
+                  <input id="cfgLunchStart" type="time" class="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-sm font-bold" />
+                </div>
+                <div>
+                  <label class="block text-[11px] font-bold text-slate-500 mb-1">結束取餐</label>
+                  <input id="cfgLunchEnd" type="time" class="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-sm font-bold" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 晚上時段 -->
+            <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <span class="font-extrabold text-sm text-slate-800">🌙 晚上營業時段</span>
+                <label class="flex items-center gap-1.5 text-xs font-extrabold text-emerald-700 cursor-pointer">
+                  <input id="cfgDinnerEnabled" type="checkbox" class="w-4 h-4 accent-emerald-600" /> 開放接單
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[11px] font-bold text-slate-500 mb-1">開始取餐</label>
+                  <input id="cfgDinnerStart" type="time" class="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-sm font-bold" />
+                </div>
+                <div>
+                  <label class="block text-[11px] font-bold text-slate-500 mb-1">結束取餐</label>
+                  <input id="cfgDinnerEnd" type="time" class="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-sm font-bold" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            <div>
+              <label class="block text-xs font-extrabold text-slate-700 mb-1">標準基本備餐時間（分鐘）</label>
+              <input id="cfgBasePrep" type="number" min="5" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+            </div>
+            <div>
+              <label class="block text-xs font-extrabold text-slate-700 mb-1">打烊前幾分鐘停止接單（緩衝）</label>
+              <select id="cfgCutoffMins" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold bg-white">
+                <option value="0">0 分鐘（可預約到結束最後一刻）</option>
+                <option value="10">打烊前 10 分鐘截單</option>
+                <option value="15">打烊前 15 分鐘截單</option>
+                <option value="20">打烊前 20 分鐘截單</option>
+                <option value="30">打烊前 30 分鐘截單</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-center justify-between">
+            <div>
+              <div class="text-xs font-extrabold text-orange-900">允許客人「開店前」提前預約今日取餐</div>
+              <div class="text-[11px] text-orange-700">例如早上 10:00 就可先預約中午 11:30 取餐；關閉則須等 11:15 開店後才可下單</div>
+            </div>
+            <input id="cfgAllowPreorder" type="checkbox" class="w-5 h-5 accent-orange-600 shrink-0" />
+          </div>
+        </div>
+
+        <!-- 卡片 C：雙層公告系統（頂部常駐公告 + 進店大視窗彈窗公告） -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+          <div class="border-b border-slate-100 pb-3">
+            <h2 class="text-base font-black text-slate-900">📢 顧客前台公告管理（橫幅 + 跳出大視窗）</h2>
+            <p class="text-xs text-slate-500 mt-0.5">常駐橫幅適合放日常提醒；大視窗彈窗適合放「連假公休、新品上市、滿額優惠」讓客人一進來必看</p>
+          </div>
+
+          <!-- 1. 頂部常駐橫幅公告 -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-extrabold text-slate-800">1. 菜單頂部常駐公告橫幅</label>
+              <label class="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer">
+                <input id="cfgNoticeEnabled" type="checkbox" class="w-4 h-4 accent-emerald-600" /> 顯示橫幅
+              </label>
+            </div>
+            <input id="cfgNotice" type="text" placeholder="例如：現點現炒，尖峰時段請提前預約取餐時間！" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+            <div class="flex flex-wrap gap-1.5">
+              <span class="text-[11px] text-slate-400 py-1">快速範本：</span>
+              <button type="button" onclick="applyNoticePreset('現點現炒，尖峰時段請提前預約取餐時間！')" class="text-[11px] bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg font-semibold">現點現炒提醒</button>
+              <button type="button" onclick="applyNoticePreset('本店使用台灣溫體豬肉，請安心享用！')" class="text-[11px] bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg font-semibold">食材產地標示</button>
+              <button type="button" onclick="applyNoticePreset('滿 500 元可外送，請直接來電洽詢！')" class="text-[11px] bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg font-semibold">滿額外送說明</button>
+            </div>
+          </div>
+
+          <!-- 2. 進店大視窗彈窗公告 -->
+          <div class="space-y-2 pt-3 border-t border-slate-100">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-extrabold text-slate-800">2. 進店強制跳出大視窗公告（重要通知必看）</label>
+              <label class="flex items-center gap-1.5 text-xs font-bold text-orange-600 cursor-pointer">
+                <input id="cfgPopupEnabled" type="checkbox" class="w-4 h-4 accent-orange-600" /> 開啟彈窗
+              </label>
+            </div>
+            <textarea id="cfgPopupText" rows="3" placeholder="例如：本週日因家族旅遊店休一日！&#10;新推出「XO醬蛋炒飯」歡迎品嚐～" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"></textarea>
+          </div>
+        </div>
+
+        <button onclick="saveStoreSettings()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3.5 rounded-2xl text-base shadow-lg">
+          💾 儲存所有營業排程與公告（立即同步前台）
+        </button>
+      </div>
+
+      <!-- 5. 老闆專屬對帳報表（含單日總營業額、午晚餐拆帳、每日明細表） -->
+      <div id="view-revenue" class="hidden space-y-4">
+        <div class="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-xs font-extrabold text-slate-600 mr-1">快速切換：</span>
+              <button onclick="setQuickRevRange('today')" class="text-xs font-extrabold bg-orange-600 text-white px-3 py-1.5 rounded-lg">今日單日</button>
+              <button onclick="setQuickRevRange('yesterday')" class="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg">昨日單日</button>
+              <button onclick="setQuickRevRange('week')" class="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg">近 7 日</button>
+              <button onclick="setQuickRevRange('month')" class="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg">本月累計</button>
+            </div>
+            <button onclick="exportRevenueCsv()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs">
+              📥 下載對帳明細表 (CSV)
+            </button>
+          </div>
+
+          <div class="flex flex-wrap items-end gap-3 pt-2 border-t border-slate-100">
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1">查詢單日 / 開始日期</label>
+              <input id="revStartDate" type="date" onchange="syncSingleDayDefault()" class="border border-slate-300 rounded-xl px-3 py-1.5 text-sm font-bold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1">結束日期（查單日選同一天）</label>
+              <input id="revEndDate" type="date" class="border border-slate-300 rounded-xl px-3 py-1.5 text-sm font-bold" />
+            </div>
+            <button onclick="queryRevenueRange()" class="bg-slate-900 hover:bg-slate-800 text-white font-bold px-5 py-2 rounded-xl text-xs">
+              🔍 查詢營業額
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-white p-4 rounded-2xl border-2 border-emerald-500/40 shadow-sm">
+            <div id="revTotalLabel" class="text-xs font-extrabold text-emerald-700">單日總營業額（已結案）</div>
+            <div id="revRangeTotal" class="text-3xl font-black text-emerald-600 mt-1">$0</div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">成交訂單數 / 客單價</div>
+            <div class="mt-1 flex items-baseline gap-2">
+              <span id="revRangeCount" class="text-2xl font-black text-slate-900">0 筆</span>
+              <span id="revRangeAvg" class="text-sm font-extrabold text-orange-600">(均 $0)</span>
+            </div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">☀️ 中午 vs 🌙 晚上營業額</div>
+            <div id="revShiftSplit" class="text-sm font-black text-slate-800 mt-2">午 $0 ｜ 晚 $0</div>
+          </div>
+          <div class="bg-white p-4 rounded-2xl border border-slate-200">
+            <div class="text-xs font-bold text-slate-500">退單筆數 / 金額</div>
+            <div id="revRangeRejected" class="text-lg font-black text-red-600 mt-1">0 筆 / $0</div>
+          </div>
+        </div>
+
+        <!-- 每日營業額一覽表（查多日時自動列出每一天的單日總營業額） -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 overflow-x-auto">
+          <h3 class="font-extrabold text-sm text-slate-800 mb-3">📅 每日單日營業額一覽表</h3>
+          <table class="w-full text-left text-xs sm:text-sm">
+            <thead>
+              <tr class="border-b border-slate-200 text-slate-500">
+                <th class="py-2 font-bold">營業日期</th>
+                <th class="py-2 font-bold">成交筆數</th>
+                <th class="py-2 font-bold">退單</th>
+                <th class="py-2 font-bold">平均客單</th>
+                <th class="py-2 font-bold text-right">單日總營業額</th>
+              </tr>
+            </thead>
+            <tbody id="dailyBreakdownBody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+
+        <div class="bg-white rounded-2xl p-5 border border-slate-200">
+          <h3 class="font-extrabold text-sm text-slate-800 mb-3">🔥 熱銷品項排行</h3>
+          <div id="topItemsList" class="space-y-2 text-sm"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- 新增品項 / 加主菜彈窗 -->
+  <div id="addMenuModal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+      <div class="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+        <h3 class="text-base font-extrabold">+ 新增餐點或加主菜</h3>
+        <button onclick="document.getElementById('addMenuModal').classList.add('hidden')" class="w-7 h-7 rounded-full bg-slate-700 font-bold">✕</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">選擇分類</label>
+          <select id="modalAddCat" onchange="toggleSeafoodOption()" class="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-bold">
+            <option value="炒飯">主餐分類：炒飯</option>
+            <option value="炒麵">主餐分類：炒麵</option>
+            <option value="家常小炒">主餐分類：家常小炒</option>
+            <option value="湯品">主餐分類：湯品</option>
+            <option value="飲料">主餐分類：飲料</option>
+            <option value="ADDON">加主菜選項（加肉/加海鮮等）</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">名稱</label>
+          <input id="modalAddName" type="text" placeholder="例如：培根蛋炒飯 或 加培根" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">價格 ($)</label>
+          <input id="modalAddPrice" type="number" placeholder="90" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold" />
+        </div>
+        <div id="modalSeafoodRow" class="hidden">
+          <label class="flex items-center gap-2 text-xs font-bold text-slate-700">
+            <input id="modalAddSeafood" type="checkbox" class="rounded" /> 屬於海鮮加料（點炒飯時自動隱藏）
+          </label>
+        </div>
+        <button onclick="confirmModalAdd()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-extrabold py-3 rounded-xl text-sm shadow">
+          確認新增
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 現場/電話客快速補單彈窗 -->
+  <div id="walkInModal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-lg rounded-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+      <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white">
+        <h3 class="text-base font-extrabold">+ 現場 / 電話客快速補單</h3>
+        <button onclick="document.getElementById('walkInModal').classList.add('hidden')" class="w-7 h-7 rounded-full bg-slate-700 font-bold">✕</button>
+      </div>
+      <div class="p-4 overflow-y-auto space-y-3 flex-1">
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">客人稱呼</label>
+            <input id="wiName" type="text" value="現場客" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">電話/桌號</label>
+            <input id="wiPhone" type="text" placeholder="選填" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">預計取餐</label>
+            <input id="wiPickup" type="time" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm font-bold" />
+          </div>
+        </div>
+
+        <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+          <div class="flex gap-2">
+            <select id="wiItemSelect" class="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm font-bold bg-white"></select>
+            <input id="wiQty" type="number" value="1" min="1" class="w-16 border border-slate-300 rounded-lg px-2 py-1.5 text-sm text-center font-bold" />
+            <button onclick="addWalkInItem()" class="bg-orange-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">加入</button>
+          </div>
+          <div id="wiAddonsBox" class="flex flex-wrap gap-1.5 pt-1"></div>
+          <input id="wiItemNote" type="text" placeholder="單品口味/備註（例如：加辣、不蔥）" class="w-full border border-slate-300 rounded-lg px-2.5 py-1 text-xs" />
+        </div>
+
+        <div id="wiCartList" class="space-y-1.5 max-h-40 overflow-y-auto"></div>
+      </div>
+      <div class="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+        <span class="font-black text-base">總計：<span id="wiTotal" class="text-orange-600">$0</span></span>
+        <button onclick="submitWalkInOrder()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-sm">
+          確認送入廚房製作
+        </button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const SUPABASE_URL = 'https://qqhucboxycgxihfexyre.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_Yiy4kOyBFRB4TEe_bdOzhQ_pUXQ750T';
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  let userRole = null;
+  let storeConfig = null;
+  let allOrders = [];
+  let rangeOrdersCache = [];
+  let wiCart = [];
+
+  function handleLogin() {
+    const pin = document.getElementById('pinInput').value.trim();
+    if (pin === '332606') userRole = 'staff';
+    else if (pin === '9999') userRole = 'owner';
+    else return alert('密碼錯誤！');
+
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('adminApp').classList.remove('hidden');
+
+    const badge = document.getElementById('roleBadge');
+    if (userRole === 'owner') {
+      badge.textContent = '👑 老闆模式';
+      badge.className = 'text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500 text-slate-950';
+      document.getElementById('tab-revenue').classList.remove('hidden');
+    } else {
+      badge.textContent = '店員接單模式';
+      document.getElementById('tab-revenue').classList.add('hidden');
+    }
+    initAdmin();
+  }
+
+  function logout() { location.reload(); }
+
+  function testBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (e) {}
+  }
+
+  async function initAdmin() {
+    await loadSettings();
+    await fetchOrders();
+    const todayIso = new Date().toISOString().slice(0, 10);
+    document.getElementById('revStartDate').value = todayIso;
+    document.getElementById('revEndDate').value = todayIso;
+    if (userRole === 'owner') queryRevenueRange();
+
+    db.channel('admin_orders_realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, () => {
+        testBeep();
+        fetchOrders();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
+        fetchOrders();
+      })
+      .subscribe();
+  }
+
+  async function loadSettings() {
+    const { data } = await db.from('store_settings').select('config').eq('id', 1).single();
+    if (data && data.config) {
+      storeConfig = {
+        weeklyClosedDays: [],
+        specialHolidays: [],
+        closedReason: '今日公休一日，造成不便敬請見諒！',
+        lunchEnabled: true,
+        dinnerEnabled: true,
+        allowPreorderBeforeOpen: true,
+        cutoffMinutesBeforeClose: 0,
+        noticeEnabled: true,
+        popupNoticeEnabled: false,
+        popupNoticeText: '',
+        ...data.config
+      };
+      if (!storeConfig.addons) storeConfig.addons = [];
+      const todayStr = new Date().toDateString();
+      if (storeConfig.lastResetDate !== todayStr) {
+        storeConfig.lastResetDate = todayStr;
+        storeConfig.menu.forEach(m => m.soldOut = false);
+        storeConfig.addons.forEach(a => a.soldOut = false);
+        await syncConfig();
+      }
+    } else {
+      alert('請先開啟一次顧客前台頁面初始化菜單資料，或重新整理！');
+      return;
+    }
+    updateHeaderControls();
+    renderAllMenuLists();
+    fillSettingsForm();
+  }
+
+  function updateHeaderControls() {
+    if (!storeConfig) return;
+    const openBtn = document.getElementById('toggleOpenBtn');
+    if (storeConfig.isOpen) {
+      openBtn.className = 'text-xs font-extrabold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white';
+      openBtn.textContent = '● 營業接單中';
+    } else {
+      openBtn.className = 'text-xs font-extrabold px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white';
+      openBtn.textContent = '■ 已暫停接單';
+    }
+
+    document.querySelectorAll('.delay-btn').forEach(b => {
+      b.className = 'delay-btn text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200';
+    });
+    const d = Number(storeConfig.delayMinutes || 0);
+    if (d === 0) document.getElementById('delay-0').classList.add('!bg-emerald-600', '!text-white');
+    else if (d === 15) document.getElementById('delay-15').classList.add('!bg-amber-600', '!text-white');
+    else if (d === 30) document.getElementById('delay-30').classList.add('!bg-red-600', '!text-white');
+    else {
+      const customBtn = document.getElementById('delay-custom');
+      customBtn.classList.add('!bg-purple-600', '!text-white');
+      customBtn.textContent = `+${d}分`;
+    }
+  }
+
+  async function syncConfig() {
+    await db.from('store_settings').upsert({ id: 1, config: storeConfig });
+    updateHeaderControls();
+  }
+
+  async function toggleStoreOpen() {
+    storeConfig.isOpen = !storeConfig.isOpen;
+    await syncConfig();
+  }
+
+  async function setDelayMinutes(mins) {
+    storeConfig.delayMinutes = mins;
+    document.getElementById('delay-custom').textContent = '自訂';
+    await syncConfig();
+  }
+
+  async function promptCustomDelay() {
+    const val = prompt('請輸入要順延的分鐘數（輸入 0 恢復正常）：', storeConfig.delayMinutes || 20);
+    if (val === null) return;
+    storeConfig.delayMinutes = Math.max(0, parseInt(val, 10) || 0);
+    await syncConfig();
+  }
+
+  async function fetchOrders() {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const { data } = await db.from('orders')
+      .select('*')
+      .gte('created_at', todayStart.toISOString())
+      .order('created_at', { ascending: true });
+
+    allOrders = data || [];
+    renderKdsBoards();
+    renderHistory();
+    if (userRole === 'owner') queryRevenueRange();
+  }
+
+  function renderKdsBoards() {
+    const pending = allOrders.filter(o => o.status === 'pending');
+    const preparing = allOrders.filter(o => o.status === 'preparing');
+    const ready = allOrders.filter(o => o.status === 'ready');
+
+    document.getElementById('pendingCountBadge').textContent = pending.length;
+    document.getElementById('colPendingCount').textContent = pending.length;
+    document.getElementById('colPreparingCount').textContent = preparing.length;
+    document.getElementById('colReadyCount').textContent = ready.length;
+
+    const activeOrders = [...pending, ...preparing];
+    const prepMap = {};
+    let totalDishes = 0;
+    activeOrders.forEach(o => {
+      (o.items || []).forEach(i => {
+        prepMap[i.name] = (prepMap[i.name] || 0) + i.qty;
+        totalDishes += i.qty;
+        (i.addons || []).forEach(ad => {
+          const cleanName = ad.split('(')[0];
+          prepMap[cleanName] = (prepMap[cleanName] || 0) + i.qty;
+        });
+      });
+    });
+
+    document.getElementById('prepTotalItemsCount').textContent = `待炒主餐共 ${totalDishes} 份`;
+    const prepEntries = Object.entries(prepMap);
+    document.getElementById('kitchenPrepSummary').innerHTML = prepEntries.length
+      ? prepEntries.map(([name, qty]) => `<span class="bg-orange-50 border border-orange-200 text-orange-900 font-extrabold px-2.5 py-1 rounded-lg">${name} × ${qty}</span>`).join('')
+      : '<span class="text-slate-400">目前無待炒餐點</span>';
+
+    document.getElementById('listPending').innerHTML = pending.map(o => orderCardHtml(o, true)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無待接訂單</div>';
+    document.getElementById('listPreparing').innerHTML = preparing.map(o => orderCardHtml(o, false)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無製作中訂單</div>';
+    document.getElementById('listReady').innerHTML = ready.map(o => orderCardHtml(o, false)).join('') || '<div class="text-xs text-slate-400 text-center py-6">無待取餐訂單</div>';
+  }
+
+  function orderCardHtml(o, isNew) {
+    const itemsHtml = (o.items || []).map(i => {
+      const specs = [...(i.addons || []), ...(i.tastes || []), i.note].filter(Boolean).join(' / ');
+      return `
+        <div class="py-1 border-b border-slate-100 last:border-0">
+          <div class="flex justify-between font-bold text-sm text-slate-900">
+            <span>${i.name} × ${i.qty}</span>
+            <span>$${i.subtotal}</span>
+          </div>
+          ${specs ? `<div class="text-xs text-orange-700 font-semibold mt-0.5">↳ ${specs}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    let actionBtns = '';
+    if (o.status === 'pending') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'preparing')" class="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 rounded-xl text-xs">接單開始製作</button>
+        <button onclick="rejectOrder(${o.id})" class="bg-red-100 hover:bg-red-200 text-red-700 font-bold px-3 py-2 rounded-xl text-xs">退單</button>
+      `;
+    } else if (o.status === 'preparing') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'ready')" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl text-xs">製作完成（通知取餐）</button>
+        <button onclick="rejectOrder(${o.id})" class="bg-slate-100 text-slate-600 font-bold px-2.5 py-2 rounded-xl text-xs">退單</button>
+      `;
+    } else if (o.status === 'ready') {
+      actionBtns = `
+        <button onclick="updateOrderStatus(${o.id}, 'completed')" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-xl text-xs">✓ 客人已取餐結案</button>
+      `;
+    }
+
+    return `
+      <div class="bg-white rounded-xl p-3.5 shadow-sm border border-slate-200 space-y-2.5 ${isNew ? 'new-order-flash' : ''}">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div>
+            <span class="text-xl font-black text-orange-600">${o.order_no}</span>
+            <span class="ml-2 text-xs font-extrabold bg-slate-900 text-white px-2 py-0.5 rounded">取餐 ${o.pickup_time}</span>
+          </div>
+          <span class="text-base font-black text-slate-900">$${o.total_price}</span>
+        </div>
+        <div class="text-xs text-slate-600 flex justify-between">
+          <span>👤 ${o.customer_name}（${o.customer_phone || '現場'}）</span>
+          <span>${new Date(o.created_at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })} 下單</span>
+        </div>
+        <div class="bg-slate-50 rounded-lg p-2">${itemsHtml}</div>
+        ${o.note ? `<div class="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1.5 rounded-lg">整單備註：${o.note}</div>` : ''}
+        <div class="flex gap-2 pt-1">${actionBtns}</div>
+      </div>
+    `;
+  }
+
+  async function updateOrderStatus(id, status) {
+    await db.from('orders').update({ status }).eq('id', id);
+    fetchOrders();
+  }
+
+  async function rejectOrder(id) {
+    const reason = prompt('請輸入退單原因（例如：今日已售完 / 電話聯絡不上）：', '今日已售完');
+    if (reason === null) return;
+    await db.from('orders').update({ status: 'rejected', reject_reason: reason }).eq('id', id);
+    fetchOrders();
+  }
+
+  function renderHistory() {
+    const list = allOrders.filter(o => ['completed', 'rejected'].includes(o.status)).reverse();
+    document.getElementById('historyList').innerHTML = list.map(o => `
+      <div class="bg-white rounded-xl p-3.5 border border-slate-200 space-y-1.5">
+        <div class="flex justify-between items-center">
+          <span class="font-black text-base">${o.order_no}｜${o.customer_name}</span>
+          ${o.status === 'completed'
+            ? '<span class="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">已結案</span>'
+            : '<span class="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded">已退單</span>'}
+        </div>
+        <div class="text-xs text-slate-500">取餐時間：${o.pickup_time}｜電話：${o.customer_phone || '無'}</div>
+        <div class="text-xs text-slate-700">${(o.items || []).map(i => `${i.name}x${i.qty}`).join('、')}</div>
+        ${o.reject_reason ? `<div class="text-xs text-red-600 font-bold">原因：${o.reject_reason}</div>` : ''}
+        <div class="text-right font-extrabold text-sm text-slate-900">$${o.total_price}</div>
+      </div>
+    `).join('') || '<div class="text-sm text-slate-400">今日尚無已結案或退單紀錄</div>';
+  }
+
+  // 直覺整排分類列表渲染
+  function renderAllMenuLists() {
+    if (!storeConfig) return;
+
+    const addons = storeConfig.addons || [];
+    document.getElementById('addonCountText').textContent = addons.length;
+    document.getElementById('adminAddonRows').innerHTML = addons.map((ad, idx) => `
+      <div class="px-4 py-2.5 flex items-center justify-between gap-3 ${ad.soldOut ? 'bg-red-50/70' : 'hover:bg-slate-50'}">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="font-bold text-sm ${ad.soldOut ? 'line-through text-slate-400' : 'text-slate-900'}">${ad.name}</span>
+          ${ad.seafood ? '<span class="text-[11px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold shrink-0">海鮮</span>' : ''}
+        </div>
+        <div class="flex items-center gap-2.5 shrink-0">
+          <div class="flex items-center bg-white border border-slate-300 rounded-lg px-2 py-1">
+            <span class="text-xs text-slate-400 mr-1">+$</span>
+            <input type="number" value="${ad.price}" onchange="updateAddonPrice(${idx}, this.value)"
+                   class="w-12 text-right text-sm font-extrabold text-orange-600 focus:outline-none" />
+          </div>
+          <button onclick="toggleAddonSoldOut(${idx})"
+                  class="w-24 py-1.5 rounded-lg text-xs font-extrabold transition shadow-sm ${ad.soldOut ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'}">
+            ${ad.soldOut ? '✕ 已售完' : '● 供應中'}
+          </button>
+          <button onclick="deleteAddonItem(${idx})" title="刪除此加料" class="text-slate-300 hover:text-red-500 text-sm px-1">🗑️</button>
+        </div>
+      </div>
+    `).join('');
+
+    const categories = [...new Set(storeConfig.menu.map(i => i.cat))];
+    document.getElementById('menuQuickJumpBar').innerHTML =
+      `<a href="#sec-addons" class="text-xs font-extrabold bg-slate-900 text-white px-3 py-1.5 rounded-lg">🥩 加主菜</a>` +
+      categories.map(c => `<a href="#sec-cat-${c}" class="text-xs font-bold bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 px-3 py-1.5 rounded-lg">${c}</a>`).join('');
+
+    document.getElementById('adminCategorizedMenus').innerHTML = categories.map(cat => {
+      const catItems = storeConfig.menu
+        .map((item, originalIdx) => ({ ...item, originalIdx }))
+        .filter(item => item.cat === cat);
+
+      return `
+        <section id="sec-cat-${cat}" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm scroll-mt-28">
+          <div class="bg-orange-600 text-white px-4 py-2.5 flex items-center justify-between">
+            <h2 class="text-sm font-black">🍳 ${cat}</h2>
+            <span class="text-xs text-orange-100">共 ${catItems.length} 道</span>
+          </div>
+          <div class="divide-y divide-slate-100">
+            ${catItems.map(item => `
+              <div class="px-4 py-2.5 flex items-center justify-between gap-3 ${item.soldOut ? 'bg-red-50/70' : 'hover:bg-slate-50'}">
+                <span class="font-bold text-sm sm:text-base ${item.soldOut ? 'line-through text-slate-400' : 'text-slate-900'}">${item.name}</span>
+                <div class="flex items-center gap-2.5 shrink-0">
+                  <div class="flex items-center bg-white border border-slate-300 rounded-lg px-2 py-1">
+                    <span class="text-xs text-slate-400 mr-1">$</span>
+                    <input type="number" value="${item.price}" onchange="updateItemPrice(${item.originalIdx}, this.value)"
+                           class="w-14 text-right text-sm font-extrabold text-orange-600 focus:outline-none" />
+                  </div>
+                  <button onclick="toggleItemSoldOut(${item.originalIdx})"
+                          class="w-24 py-1.5 rounded-lg text-xs font-extrabold transition shadow-sm ${item.soldOut ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'}">
+                    ${item.soldOut ? '✕ 已售完' : '● 供應中'}
+                  </button>
+                  <button onclick="deleteMenuItem(${item.originalIdx})" title="刪除此餐點" class="text-slate-300 hover:text-red-500 text-sm px-1">🗑️</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }).join('');
+  }
+
+  async function toggleAddonSoldOut(idx) {
+    storeConfig.addons[idx].soldOut = !storeConfig.addons[idx].soldOut;
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  async function updateAddonPrice(idx, val) {
+    storeConfig.addons[idx].price = Math.max(0, parseInt(val, 10) || 0);
+    await syncConfig();
+  }
+
+  async function deleteAddonItem(idx) {
+    if (!confirm(`確定刪除加主菜「${storeConfig.addons[idx].name}」？`)) return;
+    storeConfig.addons.splice(idx, 1);
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  async function toggleItemSoldOut(idx) {
+    storeConfig.menu[idx].soldOut = !storeConfig.menu[idx].soldOut;
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  async function updateItemPrice(idx, newPrice) {
+    storeConfig.menu[idx].price = Math.max(0, parseInt(newPrice, 10) || 0);
+    await syncConfig();
+  }
+
+  async function deleteMenuItem(idx) {
+    if (!confirm(`確定要刪除「${storeConfig.menu[idx].name}」嗎？`)) return;
+    storeConfig.menu.splice(idx, 1);
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  async function resetAllSoldOut() {
+    if (!confirm('確定要將所有主餐與加主菜全部恢復為「供應中」嗎？')) return;
+    storeConfig.menu.forEach(m => m.soldOut = false);
+    storeConfig.addons.forEach(a => a.soldOut = false);
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  function openAddMenuModal() {
+    document.getElementById('modalAddName').value = '';
+    document.getElementById('modalAddPrice').value = '';
+    document.getElementById('modalAddCat').value = '炒飯';
+    document.getElementById('modalSeafoodRow').classList.add('hidden');
+    document.getElementById('addMenuModal').classList.remove('hidden');
+  }
+
+  function toggleSeafoodOption() {
+    const val = document.getElementById('modalAddCat').value;
+    if (val === 'ADDON') document.getElementById('modalSeafoodRow').classList.remove('hidden');
+    else document.getElementById('modalSeafoodRow').classList.add('hidden');
+  }
+
+  async function confirmModalAdd() {
+    const cat = document.getElementById('modalAddCat').value;
+    const name = document.getElementById('modalAddName').value.trim();
+    const price = parseInt(document.getElementById('modalAddPrice').value, 10);
+    if (!name || isNaN(price)) return alert('請填寫完整的名稱與價格！');
+
+    if (cat === 'ADDON') {
+      const seafood = document.getElementById('modalAddSeafood').checked;
+      storeConfig.addons.push({ id: 'a' + Date.now(), name, price, seafood, soldOut: false });
+    } else {
+      storeConfig.menu.push({ id: 'm' + Date.now(), cat, name, price, soldOut: false });
+    }
+    document.getElementById('addMenuModal').classList.add('hidden');
+    await syncConfig();
+    renderAllMenuLists();
+  }
+
+  // 商業級營業時間與公告表單填入與儲存
+  function fillSettingsForm() {
+    if (!storeConfig) return;
+    const closedDays = storeConfig.weeklyClosedDays || [];
+    document.querySelectorAll('.weekly-day-cb').forEach(cb => {
+      cb.checked = closedDays.includes(Number(cb.value));
+    });
+    renderSpecialHolidays();
+
+    document.getElementById('cfgClosedReason').value = storeConfig.closedReason || '';
+    document.getElementById('cfgLunchEnabled').checked = storeConfig.lunchEnabled !== false;
+    document.getElementById('cfgLunchStart').value = storeConfig.lunchStart;
+    document.getElementById('cfgLunchEnd').value = storeConfig.lunchEnd;
+    document.getElementById('cfgDinnerEnabled').checked = storeConfig.dinnerEnabled !== false;
+    document.getElementById('cfgDinnerStart').value = storeConfig.dinnerStart;
+    document.getElementById('cfgDinnerEnd').value = storeConfig.dinnerEnd;
+    document.getElementById('cfgBasePrep').value = storeConfig.basePrepMinutes || 15;
+    document.getElementById('cfgCutoffMins').value = String(storeConfig.cutoffMinutesBeforeClose || 0);
+    document.getElementById('cfgAllowPreorder').checked = storeConfig.allowPreorderBeforeOpen !== false;
+
+    document.getElementById('cfgNoticeEnabled').checked = storeConfig.noticeEnabled !== false;
+    document.getElementById('cfgNotice').value = storeConfig.notice || '';
+    document.getElementById('cfgPopupEnabled').checked = Boolean(storeConfig.popupNoticeEnabled);
+    document.getElementById('cfgPopupText').value = storeConfig.popupNoticeText || '';
+  }
+
+  function renderSpecialHolidays() {
+    const list = storeConfig.specialHolidays || [];
+    document.getElementById('specialHolidaysList').innerHTML = list.length
+      ? list.map((d, idx) => `
+          <span class="bg-red-50 border border-red-200 text-red-700 text-xs font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-2">
+            ${d}
+            <button type="button" onclick="removeSpecialHoliday(${idx})" class="text-red-400 hover:text-red-700 font-black">✕</button>
+          </span>
+        `).join('')
+      : '<span class="text-xs text-slate-400">目前無設定特定臨時店休日期</span>';
+  }
+
+  function addSpecialHoliday() {
+    const d = document.getElementById('newHolidayDate').value;
+    if (!d) return alert('請先選擇要店休的日期！');
+    if (!storeConfig.specialHolidays) storeConfig.specialHolidays = [];
+    if (!storeConfig.specialHolidays.includes(d)) {
+      storeConfig.specialHolidays.push(d);
+      storeConfig.specialHolidays.sort();
+      renderSpecialHolidays();
+    }
+    document.getElementById('newHolidayDate').value = '';
+  }
+
+  function removeSpecialHoliday(idx) {
+    storeConfig.specialHolidays.splice(idx, 1);
+    renderSpecialHolidays();
+  }
+
+  function applyNoticePreset(text) {
+    document.getElementById('cfgNotice').value = text;
+    document.getElementById('cfgNoticeEnabled').checked = true;
+  }
+
+  async function saveStoreSettings() {
+    storeConfig.weeklyClosedDays = [...document.querySelectorAll('.weekly-day-cb:checked')].map(cb => Number(cb.value));
+    storeConfig.closedReason = document.getElementById('cfgClosedReason').value.trim();
+
+    storeConfig.lunchEnabled = document.getElementById('cfgLunchEnabled').checked;
+    storeConfig.lunchStart = document.getElementById('cfgLunchStart').value;
+    storeConfig.lunchEnd = document.getElementById('cfgLunchEnd').value;
+
+    storeConfig.dinnerEnabled = document.getElementById('cfgDinnerEnabled').checked;
+    storeConfig.dinnerStart = document.getElementById('cfgDinnerStart').value;
+    storeConfig.dinnerEnd = document.getElementById('cfgDinnerEnd').value;
+
+    storeConfig.basePrepMinutes = parseInt(document.getElementById('cfgBasePrep').value, 10) || 15;
+    storeConfig.cutoffMinutesBeforeClose = parseInt(document.getElementById('cfgCutoffMins').value, 10) || 0;
+    storeConfig.allowPreorderBeforeOpen = document.getElementById('cfgAllowPreorder').checked;
+
+    storeConfig.noticeEnabled = document.getElementById('cfgNoticeEnabled').checked;
+    storeConfig.notice = document.getElementById('cfgNotice').value.trim();
+    storeConfig.popupNoticeEnabled = document.getElementById('cfgPopupEnabled').checked;
+    storeConfig.popupNoticeText = document.getElementById('cfgPopupText').value.trim();
+
+    await syncConfig();
+    alert('已儲存所有排程與公告設定！顧客前台已即時同步更新。');
+  }
+
+  // 現場/電話補單
+  function openWalkInModal() {
+    if (!storeConfig) return;
+    wiCart = [];
+    renderWiCart();
+    const now = new Date(Date.now() + 15 * 60000);
+    document.getElementById('wiPickup').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    document.getElementById('wiItemSelect').innerHTML = storeConfig.menu.map(m =>
+      `<option value="${m.id}">${m.cat} - ${m.name} ($${m.price})</option>`
+    ).join('');
+    document.getElementById('wiAddonsBox').innerHTML = (storeConfig.addons || []).map(a => `
+      <label class="text-xs bg-white border border-slate-300 rounded px-2 py-1 flex items-center gap-1 cursor-pointer">
+        <input type="checkbox" class="wi-addon-cb" value="${a.id}" /> ${a.name}(+$${a.price})
+      </label>
+    `).join('');
+    document.getElementById('walkInModal').classList.remove('hidden');
+  }
+
+  function addWalkInItem() {
+    const itemId = document.getElementById('wiItemSelect').value;
+    const item = storeConfig.menu.find(m => m.id === itemId);
+    const qty = Math.max(1, parseInt(document.getElementById('wiQty').value, 10) || 1);
+    const note = document.getElementById('wiItemNote').value.trim();
+    const checkedIds = [...document.querySelectorAll('.wi-addon-cb:checked')].map(cb => cb.value);
+    const addons = storeConfig.addons.filter(a => checkedIds.includes(a.id));
+
+    const unitPrice = item.price + addons.reduce((s, a) => s + a.price, 0);
+    wiCart.push({
+      name: item.name,
+      cat: item.cat,
+      basePrice: item.price,
+      addons: addons.map(a => `${a.name}(+$${a.price})`),
+      tastes: [],
+      note,
+      qty,
+      unitPrice,
+      subtotal: unitPrice * qty
+    });
+
+    document.querySelectorAll('.wi-addon-cb').forEach(cb => cb.checked = false);
+    document.getElementById('wiItemNote').value = '';
+    document.getElementById('wiQty').value = 1;
+    renderWiCart();
+  }
+
+  function renderWiCart() {
+    document.getElementById('wiCartList').innerHTML = wiCart.map((i, idx) => `
+      <div class="flex justify-between items-center bg-slate-100 px-3 py-1.5 rounded-lg text-xs">
+        <span><strong>${i.name}</strong> x${i.qty} ${[...i.addons, i.note].filter(Boolean).join('/')}</span>
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-orange-600">$${i.subtotal}</span>
+          <button onclick="wiCart.splice(${idx},1); renderWiCart();" class="text-red-500 font-bold">✕</button>
+        </div>
+      </div>
+    `).join('');
+    const total = wiCart.reduce((s, i) => s + i.subtotal, 0);
+    document.getElementById('wiTotal').textContent = `$${total}`;
+  }
+
+  async function submitWalkInOrder() {
+    if (wiCart.length === 0) return alert('請先加入餐點！');
+    const name = document.getElementById('wiName').value.trim() || '現場客';
+    const phone = document.getElementById('wiPhone').value.trim();
+    const pickup = document.getElementById('wiPickup').value || '現場等';
+    const total = wiCart.reduce((s, i) => s + i.subtotal, 0);
+
+    const seq = String(allOrders.length + 1).padStart(3, '0');
+    await db.from('orders').insert({
+      order_no: `#${seq}`,
+      customer_name: name,
+      customer_phone: phone,
+      pickup_time: pickup,
+      items: wiCart,
+      total_price: total,
+      note: '現場/電話補單',
+      status: 'preparing'
+    });
+    document.getElementById('walkInModal').classList.add('hidden');
+    fetchOrders();
+  }
+
+  function formatLocalDateStr(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function syncSingleDayDefault() {
+    const s = document.getElementById('revStartDate').value;
+    if (s) document.getElementById('revEndDate').value = s;
+  }
+
+  function setQuickRevRange(mode) {
+    const now = new Date();
+    let start = new Date(now);
+    let end = new Date(now);
+    if (mode === 'yesterday') {
+      start.setDate(now.getDate() - 1);
+      end.setDate(now.getDate() - 1);
+    } else if (mode === 'week') {
+      start.setDate(now.getDate() - 6);
+    } else if (mode === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    document.getElementById('revStartDate').value = formatLocalDateStr(start);
+    document.getElementById('revEndDate').value = formatLocalDateStr(end);
+    queryRevenueRange();
+  }
+
+  // 老闆日期區間報表（含單日總營業額、午晚餐拆帳、每日一覽表）
+  async function queryRevenueRange() {
+    if (userRole !== 'owner') return;
+    const sDate = document.getElementById('revStartDate').value;
+    const eDate = document.getElementById('revEndDate').value;
+    if (!sDate || !eDate) return;
+
+    document.getElementById('revTotalLabel').textContent = sDate === eDate
+      ? `${sDate} 單日總營業額`
+      : `${sDate} ~ ${eDate} 總營業額`;
+
+    const startIso = new Date(`${sDate}T00:00:00`).toISOString();
+    const endIso = new Date(`${eDate}T23:59:59`).toISOString();
+
+    const { data } = await db.from('orders')
+      .select('*')
+      .gte('created_at', startIso)
+      .lte('created_at', endIso)
+      .order('created_at', { ascending: true });
+
+    rangeOrdersCache = data || [];
+    const completed = rangeOrdersCache.filter(o => o.status === 'completed');
+    const rejected = rangeOrdersCache.filter(o => o.status === 'rejected');
+
+    const sum = completed.reduce((s, o) => s + (o.total_price || 0), 0);
+    const rejSum = rejected.reduce((s, o) => s + (o.total_price || 0), 0);
+    const avg = completed.length ? Math.round(sum / completed.length) : 0;
+
+    // 午晚餐營業額拆分（以取餐時間 < 15:00 為中午，>= 15:00 為晚上）
+    let lunchSum = 0;
+    let dinnerSum = 0;
+    completed.forEach(o => {
+      const hour = parseInt((o.pickup_time || '12:00').split(':')[0], 10);
+      if (hour < 15) lunchSum += (o.total_price || 0);
+      else dinnerSum += (o.total_price || 0);
+    });
+
+    document.getElementById('revRangeTotal').textContent = `$${sum.toLocaleString()}`;
+    document.getElementById('revRangeCount').textContent = `${completed.length} 筆`;
+    document.getElementById('revRangeAvg').textContent = `(均 $${avg})`;
+    document.getElementById('revShiftSplit').textContent = `午 $${lunchSum.toLocaleString()} ｜ 晚 $${dinnerSum.toLocaleString()}`;
+    document.getElementById('revRangeRejected').textContent = `${rejected.length} 筆 / $${rejSum.toLocaleString()}`;
+
+    // 按日期分組統計每日單日總營業額
+    const dailyMap = {};
+    rangeOrdersCache.forEach(o => {
+      const dayKey = formatLocalDateStr(new Date(o.created_at));
+      if (!dailyMap[dayKey]) dailyMap[dayKey] = { completedCount: 0, rejectedCount: 0, total: 0 };
+      if (o.status === 'completed') {
+        dailyMap[dayKey].completedCount += 1;
+        dailyMap[dayKey].total += (o.total_price || 0);
+      } else if (o.status === 'rejected') {
+        dailyMap[dayKey].rejectedCount += 1;
+      }
+    });
+
+    const dailyRows = Object.entries(dailyMap).sort((a, b) => b[0].localeCompare(a[0]));
+    document.getElementById('dailyBreakdownBody').innerHTML = dailyRows.length
+      ? dailyRows.map(([day, st]) => {
+          const dAvg = st.completedCount ? Math.round(st.total / st.completedCount) : 0;
+          return `
+            <tr class="hover:bg-slate-50">
+              <td class="py-2.5 font-bold text-slate-800">${day}</td>
+              <td class="py-2.5 font-semibold">${st.completedCount} 筆</td>
+              <td class="py-2.5 text-red-500">${st.rejectedCount} 筆</td>
+              <td class="py-2.5 text-slate-600">$${dAvg}</td>
+              <td class="py-2.5 text-right font-black text-emerald-600">$${st.total.toLocaleString()}</td>
+            </tr>
+          `;
+        }).join('')
+      : '<tr><td colspan="5" class="py-6 text-center text-slate-400">此日期區間尚無訂單紀錄</td></tr>';
+
+    const itemStats = {};
+    completed.forEach(o => {
+      (o.items || []).forEach(i => {
+        itemStats[i.name] = (itemStats[i.name] || 0) + i.qty;
+      });
+    });
+
+    const sorted = Object.entries(itemStats).sort((a, b) => b[1] - a[1]);
+    document.getElementById('topItemsList').innerHTML = sorted.map(([name, qty], idx) => `
+      <div class="flex justify-between items-center py-1.5 border-b border-slate-100">
+        <span><strong class="text-orange-600 mr-2">#${idx + 1}</strong>${name}</span>
+        <span class="font-bold text-slate-800">${qty} 份</span>
+      </div>
+    `).join('') || '<div class="text-slate-400 text-xs">此日期區間尚無已結案銷售紀錄</div>';
+  }
+
+  function exportRevenueCsv() {
+    if (!rangeOrdersCache.length) return alert('此區間無資料可匯出！');
+    let csv = '﻿單號,下單時間,取餐時間,訂購人,電話,餐點內容,總金額,狀態,退單原因
+';
+    rangeOrdersCache.forEach(o => {
+      const itemsStr = (o.items || []).map(i => `${i.name}x${i.qty}`).join(' ');
+      csv += `${o.order_no},"${new Date(o.created_at).toLocaleString('zh-TW')}",${o.pickup_time},"${o.customer_name}","${o.customer_phone || ''}","${itemsStr}",${o.total_price},${o.status},"${o.reject_reason || ''}"
+`;
+    });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `炒燴噠對帳明細_${document.getElementById('revStartDate').value}.csv`;
+    a.click();
+  }
+
+  function switchTab(tabName) {
+    ['orders', 'history', 'menu', 'settings', 'revenue'].forEach(t => {
+      document.getElementById(`view-${t}`).classList.add('hidden');
+      const btn = document.getElementById(`tab-${t}`);
+      if (btn) {
+        btn.classList.remove('border-b-2', 'border-orange-600', 'text-orange-600');
+        btn.classList.add('text-slate-500');
+      }
+    });
+    document.getElementById(`view-${tabName}`).classList.remove('hidden');
+    const activeBtn = document.getElementById(`tab-${tabName}`);
+    activeBtn.classList.add('border-b-2', 'border-orange-600', 'text-orange-600');
+    activeBtn.classList.remove('text-slate-500');
+    if (tabName === 'revenue') queryRevenueRange();
+  }
+</script>
+</body>
+</html>
